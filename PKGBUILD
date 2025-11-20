@@ -2,7 +2,7 @@
 
 pkgname=swisstag-git
 
-pkgver=4.7.r0.g1234567
+pkgver=4.7.r1.g2005650
 
 pkgrel=1
 
