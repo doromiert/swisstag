@@ -11,26 +11,36 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        # Define lyricsgenius manually since it's not in nixpkgs
+        # 1. Define lyricsgenius
         lyricsgenius = pkgs.python3Packages.buildPythonPackage rec {
           pname = "lyricsgenius";
           version = "3.0.1";
-          
-          # Fix for Python 3.13 / Modern Nixpkgs: Enable pyproject format
+          pyproject = true;
+          src = pkgs.python3Packages.fetchPypi {
+            inherit pname version;
+            sha256 = "sha256-g671X/yguOppZRxLFEaT0cASaHp9pX+I0JWzM/LhiSg="; 
+          };
+          doCheck = false;
+          build-system = with pkgs.python3Packages; [ setuptools ];
+          propagatedBuildInputs = with pkgs.python3Packages; [ requests beautifulsoup4 ];
+        };
+
+        # 2. Define syncedlyrics (Manually)
+        syncedlyrics = pkgs.python3Packages.buildPythonPackage rec {
+          pname = "syncedlyrics";
+          version = "1.0.0"; # Update if needed
           pyproject = true;
 
           src = pkgs.python3Packages.fetchPypi {
             inherit pname version;
-            # Use lib.fakeSha256 to force Nix to tell us the actual hash
-            sha256 = "sha256-g671X/yguOppZRxLFEaT0cASaHp9pX+I0JWzM/LhiSg="; 
+            # RUN 'nix build', COPY THE ERROR HASH, AND PASTE IT HERE:
+            sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; 
           };
 
           doCheck = false;
-          
-          # Add setuptools to build-system
-          build-system = with pkgs.python3Packages; [ setuptools ];
-          
-          propagatedBuildInputs = with pkgs.python3Packages; [ requests beautifulsoup4 ];
+          build-system = with pkgs.python3Packages; [ poetry-core ]; # Usually poetry or setuptools
+          # rapidfuzz is a key dependency for syncedlyrics
+          propagatedBuildInputs = with pkgs.python3Packages; [ requests beautifulsoup4 rapidfuzz ];
         };
 
         pythonEnv = pkgs.python3.withPackages (ps: with ps; [
@@ -42,7 +52,9 @@
           unidecode
           pillow
           beautifulsoup4
-          lyricsgenius   # Our custom derivation
+          rapidfuzz      # Required by syncedlyrics
+          lyricsgenius
+          syncedlyrics
         ]);
 
       in
@@ -51,20 +63,27 @@
           name = "swisstag";
           src = ./.;
           
-          propagatedBuildInputs = [ pythonEnv ];
+          # We use makeWrapper to ensure fpcalc is found in PATH
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          propagatedBuildInputs = [ pythonEnv pkgs.chromaprint ];
           
           installPhase = ''
             mkdir -p $out/bin
             cp swisstag.py $out/bin/swisstag
             chmod +x $out/bin/swisstag
             
-            # Man Page Installation
+            # Man Page
             mkdir -p $out/share/man/man1
             cp swisstag.1 $out/share/man/man1/swisstag.1
           '';
           
           postFixup = ''
+            # 1. Fix python interpreter path
             sed -i '1s|^#!/usr/bin/env python3|#!${pythonEnv}/bin/python3|' $out/bin/swisstag
+            
+            # 2. Wrap the binary to include fpcalc (chromaprint) in PATH
+            wrapProgram $out/bin/swisstag \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.chromaprint ]}
           '';
 
           meta = with pkgs.lib; {
@@ -80,7 +99,7 @@
         };
 
         devShells.default = pkgs.mkShell {
-          buildInputs = [ pythonEnv ];
+          buildInputs = [ pythonEnv pkgs.chromaprint ];
         };
       }
     );

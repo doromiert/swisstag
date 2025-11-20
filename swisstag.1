@@ -1,6 +1,6 @@
-.TH SWISSTAG 1 "November 2025" "4.7" "User Commands"
+.TH SWISSTAG 1 "November 2025" "5.0" "User Commands"
 .SH NAME
-swisstag \- Automated music tagger using Genius and MusicBrainz
+swisstag - Automated music tagger using Genius and MusicBrainz
 
 .SH SYNOPSIS
 .B swisstag
@@ -14,10 +14,13 @@ is an intelligent music tagging utility that fetches metadata, lyrics, and cover
 
 .SS "Core Modes"
 .TP
-.BR \-a ", " \-\-album
+.BR -a ", " --album
 Activates Album Mode. Fetches the full tracklist from Genius first, then matches local files to the official tracklist using fuzzy matching. Recommended for processing directories.
 .TP
-.BR \-s ", " \-\-search \ \fIKEY=VALUE\fP...
+.BR -p ", " --chromaprint
+Use acoustic fingerprinting (AcoustID) to identify files via audio content rather than filenames. Requires \fBfpcalc\fP (chromaprint) to be installed.
+.TP
+.BR -s ", " --search \ \fIKEY=VALUE\fP...
 Provide manual search criteria to bypass local tag reading or directory inference.
 .br
 Keys: \fIname\fP, \fIartist\fP, \fIurl\fP.
@@ -26,12 +29,12 @@ Example: \fB--search artist="Kanye West" name="Yeezus"\fP
 
 .SS "Tagging & Handling"
 .TP
-.BR \-t ", " \-\-manual-tags \ \fITAG=VALUE\fP...
+.BR -t ", " --manual-tags \ \fITAG=VALUE\fP...
 Manually override specific tags before applying.
 .br
 Tags: \fItitle\fP, \fIartist\fP, \fIalbum\fP, \fIyear\fP, \fIgenre\fP.
 .TP
-.BR \-F ", " \-\-feat-handling \ \fIMODE\fP
+.BR -F ", " --feat-handling \ \fIMODE\fP
 Controls how "feat." artists in song titles are handled.
 .br
 \fBkeep\fP: Leaves title as-is (e.g., "Song (feat. X)").
@@ -42,7 +45,7 @@ Controls how "feat." artists in song titles are handled.
 
 .SS "Filesystem Operations"
 .TP
-.BR \-f ", " \-\-filesystem \ \fIOPTS\fP
+.BR -f ", " --filesystem \ \fIOPTS\fP
 Comma-separated list of filesystem actions.
 .br
 \fBrename\fP: Renames files to "Title.mp3".
@@ -55,33 +58,44 @@ Comma-separated list of filesystem actions.
 
 .SS "Media (Lyrics & Cover)"
 .TP
-.BR \-c ", " \-\-cover-art \ \fIMODE\fP
+.BR -c ", " --cover-art \ \fIMODE\fP
 \fBauto\fP: Fetches from Genius.
 .br
 \fBfile=/path.jpg\fP: Uses local image.
 .br
 \fBextract\fP: Extracts embedded art.
 .TP
-.BR \-l ", " \-\-lyrics \ \fIMODE\fP
+.BR -l ", " --lyrics \ \fIMODE\fP
 \fBembed\fP: Writes to USLT/LYRICS tag.
 .br
 \fBlrc\fP: Saves separate .lrc file.
 .br
 \fBboth\fP: Does both.
+.TP
+.BR -L ", " --lyrics-source \ \fISOURCE\fP
+Control source of lyrics.
+.br
+\fBinteractive\fP: Interactive picker for every track.
+.br
+\fBauto\fP: Genius first, fallback to SyncedLyrics. If fails, asks user interactively.
+.br
+\fBsynced\fP: Force line-by-line (LRC) lyrics via SyncedLyrics.
+.br
+\fBgenius\fP: Force Genius API only.
 
 .SS "Configuration"
 .TP
-.BR \-C ", " \-\-config \ \fIACTION TARGET=[VALUE]\fP
+.BR -C ", " --config \ \fIACTION TARGET=[VALUE]\fP
 Manage configuration.
 .br
 Actions: \fBget\fP, \fBset\fP.
 .br
 Example: \fBswisstag -C set defaults.rename true\fP
 .TP
-.BR \-\-setup-token
+.BR --setup-token
 Runs the interactive wizard to set up the Genius API token.
 .TP
-.BR \-\-install-deps
+.BR --install-deps
 Automatically installs required Python dependencies via pip.
 
 .SH EXAMPLES
@@ -90,8 +104,8 @@ Automatically installs required Python dependencies via pip.
 swisstag -a -f infer-dirs,rename
 
 .TP
-.B Fix a specific song with manual search:
-swisstag song.mp3 -s artist="Nirvana" name="Smells Like Teen Spirit"
+.B Identify a mystery file using fingerprinting:
+swisstag mystery_file.mp3 -p
 
 .SH FILES
 .TP
