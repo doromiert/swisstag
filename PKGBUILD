@@ -1,4 +1,4 @@
-Maintainer: doromiert <doromiert@gmail.com>
+# Maintainer: doromiert <doromiert@gmail.com>
 
 pkgname=swisstag-git
 
