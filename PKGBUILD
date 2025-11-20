@@ -1,8 +1,8 @@
- # Maintainer: doromiert <your@email.com>
+Maintainer: doromiert <doromiert@gmail.com>
 
 pkgname=swisstag-git
 
-pkgver=4.7.r1.g2005650
+pkgver=4.7.r0.g1234567
 
 pkgrel=1
 
@@ -12,7 +12,7 @@ arch=('any')
 
 url="https://github.com/doromiert/swisstag"
 
-license=('GPL3')
+license=('GPL-3.0-or-later')
 
 depends=(
 
