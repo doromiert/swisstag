@@ -68,6 +68,9 @@ Example: Add a new Band/Group to auto-expand (Requires editing config.json manua
 - thefuzz & python-levenshtein (Fuzzy string matching)
 - requests & unidecode (Utilities)
 - Pillow (Image processing)
+- chromaprint (song fingerprinting)
+- rapidfuzz
+- syncedlyrics
 
 ## License
 GPL-3
