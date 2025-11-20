@@ -3,6 +3,8 @@ Swisstag is an automated music tagging utility for Linux. It fetches metadata, l
 
 It is designed to be "set and forget"—once configured, it can process entire albums, rename files, and sort your library with a single command.
 
+<img width="499" height="492" alt="image" src="https://github.com/user-attachments/assets/8854db0e-2fcf-4294-969c-0f4e2eb801c4" />
+
 ## Features
 - **Smart Album Mode:** Fetches the official tracklist from Genius and fuzzy-matches your local files to it, fixing track numbers and ordering even if your files are named inconsistently.
 - **Feature Artist Handling:* Automatically extracts "feat. X" from song titles and moves them to the Artist tag (or keeps them, based on your preference).
