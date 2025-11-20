@@ -1,0 +1,102 @@
+.TH SWISSTAG 1 "November 2025" "4.7" "User Commands"
+.SH NAME
+swisstag \- Automated music tagger using Genius and MusicBrainz
+
+.SH SYNOPSIS
+.B swisstag
+[\fIOPTIONS\fR] [\fIFILE\fR|\fIDIRECTORY\fR]
+
+.SH DESCRIPTION
+.B swisstag
+is an intelligent music tagging utility that fetches metadata, lyrics, and cover art from Genius and MusicBrainz. It is designed to process single files or entire albums, handling complex tasks like feature artist splitting, band member expansion, and file renaming automatically.
+
+.SH OPTIONS
+
+.SS "Core Modes"
+.TP
+.BR \-a ", " \-\-album
+Activates Album Mode. Fetches the full tracklist from Genius first, then matches local files to the official tracklist using fuzzy matching. Recommended for processing directories.
+.TP
+.BR \-s ", " \-\-search \ \fIKEY=VALUE\fP...
+Provide manual search criteria to bypass local tag reading or directory inference.
+.br
+Keys: \fIname\fP, \fIartist\fP, \fIurl\fP.
+.br
+Example: \fB--search artist="Kanye West" name="Yeezus"\fP
+
+.SS "Tagging & Handling"
+.TP
+.BR \-t ", " \-\-manual-tags \ \fITAG=VALUE\fP...
+Manually override specific tags before applying.
+.br
+Tags: \fItitle\fP, \fIartist\fP, \fIalbum\fP, \fIyear\fP, \fIgenre\fP.
+.TP
+.BR \-F ", " \-\-feat-handling \ \fIMODE\fP
+Controls how "feat." artists in song titles are handled.
+.br
+\fBkeep\fP: Leaves title as-is (e.g., "Song (feat. X)").
+.br
+\fBsplit\fP: Moves artist to Artist tag, adds "!" prefix to title.
+.br
+\fBsplit-clean\fP: Moves artist to Artist tag, removes from title entirely.
+
+.SS "Filesystem Operations"
+.TP
+.BR \-f ", " \-\-filesystem \ \fIOPTS\fP
+Comma-separated list of filesystem actions.
+.br
+\fBrename\fP: Renames files to "Title.mp3".
+.br
+\fBmatch-filename\fP: Matches tracks by filename similarity (Album Mode).
+.br
+\fBinfer-dirs\fP: Infers Artist/Album from parent directory names.
+.br
+\fBautosort\fP: Moves files into "Artist/Album/" structure.
+
+.SS "Media (Lyrics & Cover)"
+.TP
+.BR \-c ", " \-\-cover-art \ \fIMODE\fP
+\fBauto\fP: Fetches from Genius.
+.br
+\fBfile=/path.jpg\fP: Uses local image.
+.br
+\fBextract\fP: Extracts embedded art.
+.TP
+.BR \-l ", " \-\-lyrics \ \fIMODE\fP
+\fBembed\fP: Writes to USLT/LYRICS tag.
+.br
+\fBlrc\fP: Saves separate .lrc file.
+.br
+\fBboth\fP: Does both.
+
+.SS "Configuration"
+.TP
+.BR \-C ", " \-\-config \ \fIACTION TARGET=[VALUE]\fP
+Manage configuration.
+.br
+Actions: \fBget\fP, \fBset\fP.
+.br
+Example: \fBswisstag -C set defaults.rename true\fP
+.TP
+.BR \-\-setup-token
+Runs the interactive wizard to set up the Genius API token.
+.TP
+.BR \-\-install-deps
+Automatically installs required Python dependencies via pip.
+
+.SH EXAMPLES
+.TP
+.B Process an album using folder names:
+swisstag -a -f infer-dirs,rename
+
+.TP
+.B Fix a specific song with manual search:
+swisstag song.mp3 -s artist="Nirvana" name="Smells Like Teen Spirit"
+
+.SH FILES
+.TP
+.I ~/.config/swisstag/config.json
+User configuration file.
+
+.SH SEE ALSO
+.BR swisstag --help
