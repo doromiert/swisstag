@@ -14,9 +14,9 @@ It is designed to be "set and forget"—once configured, it can process entire a
 
 ## Installation
 ### Arch Linux (AUR)
-You can install swisstag using your preferred AUR helper:yay -S swisstag-git
+You can install swisstag using your preferred AUR helper: `yay -S swisstag-git`
 ### NixOS / Nix Flakes
-Swisstag is available as a Nix Flake. You can run it directly: `nix run github:yourusername/swisstag` or add it to your flake.nix.
+Swisstag is available as a Nix Flake. You can run it directly: `nix run github:doromiert/swisstag` or add it to your flake.nix.
 ### Manual Installation
 Swisstag is a single-file Python script. You can download it and let it self-manage dependencies: 
 ``` wget https://raw.githubusercontent.com/doromiert/swisstag/main/swisstag.py`
