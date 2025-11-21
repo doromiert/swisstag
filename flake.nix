@@ -34,7 +34,7 @@
           src = pkgs.python3Packages.fetchPypi {
             inherit pname version;
             # RUN 'nix build', COPY THE ERROR HASH, AND PASTE IT HERE:
-            sha256 = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; 
+            sha256 = "sha256-JrwIR7s1tYAyS3eYCsmxzkHJz/7WOe7rkDABfhumuZE="; 
           };
 
           doCheck = false;
