@@ -21,8 +21,22 @@ from io import BytesIO
 # --- Constants & Configuration ---
 APP_NAME = "swisstag"
 VERSION = "5.0"
-CONFIG_DIR = Path.home() / ".config" / "swisstag"
-CONFIG_FILE = CONFIG_DIR / "config.json"
+# Resolve configuration file location.
+# Priority (highest -> lowest):
+# 1) SWISSTAG_CONFIG env var (full path to a config file)
+# 2) XDG_CONFIG_HOME env var (directory) -> $XDG_CONFIG_HOME/swisstag/config.json
+# 3) Default: ~/.config/swisstag/config.json
+_env_config = os.environ.get("SWISSTAG_CONFIG")
+if _env_config:
+    CONFIG_FILE = Path(_env_config)
+    CONFIG_DIR = CONFIG_FILE.parent
+else:
+    _xdg = os.environ.get("XDG_CONFIG_HOME")
+    if _xdg:
+        CONFIG_DIR = Path(_xdg) / "swisstag"
+    else:
+        CONFIG_DIR = Path.home() / ".config" / "swisstag"
+    CONFIG_FILE = CONFIG_DIR / "config.json"
 
 # --- ANSI Colors ---
 class Colors:
@@ -78,7 +92,6 @@ REQUIRED_PACKAGES = {
     "lyricsgenius": "lyricsgenius",
     "musicbrainzngs": "musicbrainzngs",
     "thefuzz": "thefuzz",
-    "Levenshtein": "python-levenshtein",
     "requests": "requests",
     "unidecode": "unidecode",
     "PIL": "Pillow",
@@ -302,14 +315,38 @@ class MetadataProvider:
 
     @api_retry()
     def _genius_search_hits(self, title, artist):
-        if not self.genius: return []
-        return self.genius.search_songs(f"{artist} {title}", per_page=5)
+        if not self.genius: return {}
+        try:
+            return self.genius.search_songs(f"{artist} {title}", per_page=5)
+        except requests.exceptions.HTTPError as e:
+            # If Genius is returning 403 Forbidden, disable the provider and warn the user
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            if status == 403:
+                try:
+                    self.logger.warn("Genius API returned 403 Forbidde n. Disabling Genius provider.\n" \
+                                     "Set a valid token in config or via GENIUS_ACCESS_TOKEN to re-enable.")
+                except Exception:
+                    pass
+                self.genius = None
+                return {}
+            raise
 
     @api_retry()
     def search_album_candidates(self, query: str) -> List[Dict]:
         if not self.genius: return []
         self.logger.log("network", f"Searching Genius for albums: {query}")
-        res = self.genius.search_albums(query, per_page=5)
+        try:
+            res = self.genius.search_albums(query, per_page=5)
+        except requests.exceptions.HTTPError as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            if status == 403:
+                try:
+                    self.logger.warn("Genius API returned 403 Forbidden while searching albums. Disabling Genius provider.")
+                except Exception:
+                    pass
+                self.genius = None
+                return []
+            raise
         candidates = []
         if res and 'sections' in res:
             for section in res.get('sections', []):
@@ -330,7 +367,18 @@ class MetadataProvider:
     def fetch_album_by_id(self, album_id: int) -> Dict:
         if not self.genius: return {}
         self.logger.log("network", f"Fetching Album Details ID: {album_id}")
-        album_raw = self.genius.album(album_id)
+        try:
+            album_raw = self.genius.album(album_id)
+        except requests.exceptions.HTTPError as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            if status == 403:
+                try:
+                    self.logger.warn("Genius API returned 403 Forbidden while fetching album. Disabling Genius provider.")
+                except Exception:
+                    pass
+                self.genius = None
+                return {}
+            raise
         album_info = album_raw['album'] if (isinstance(album_raw, dict) and 'album' in album_raw) else album_raw
         
         data = {
@@ -363,7 +411,18 @@ class MetadataProvider:
     @api_retry()
     def _genius_get_song(self, song_id):
         if not self.genius: return None
-        return self.genius.song(song_id)
+        try:
+            return self.genius.song(song_id)
+        except requests.exceptions.HTTPError as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            if status == 403:
+                try:
+                    self.logger.warn("Genius API returned 403 Forbidden while fetching song. Disabling Genius provider.")
+                except Exception:
+                    pass
+                self.genius = None
+                return None
+            raise
 
     def interactive_lyrics_picker(self, title, artist) -> Optional[str]:
         """

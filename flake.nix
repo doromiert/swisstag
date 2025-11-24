@@ -14,15 +14,16 @@
         # 1. Define lyricsgenius
         lyricsgenius = pkgs.python3Packages.buildPythonPackage rec {
           pname = "lyricsgenius";
-          version = "3.0.1";
+          version = "3.7.5";
           pyproject = true;
           src = pkgs.python3Packages.fetchPypi {
             inherit pname version;
-            sha256 = "sha256-g671X/yguOppZRxLFEaT0cASaHp9pX+I0JWzM/LhiSg="; 
+            # fake sha
+            sha256 = "sha256-xPEMFPeYBFXGXIfQz9EIa+CWba7K+ZaTAy02tlo4qhY=";
           };
           doCheck = false;
-          build-system = with pkgs.python3Packages; [ setuptools ];
-          propagatedBuildInputs = with pkgs.python3Packages; [ requests beautifulsoup4 ];
+          build-system = with pkgs.python3Packages; [ setuptools hatchling ];
+          propagatedBuildInputs = with pkgs.python3Packages; [ requests beautifulsoup4 hatchling ];
         };
 
         # 2. Define syncedlyrics (Manually)
@@ -47,14 +48,13 @@
           mutagen
           musicbrainzngs
           thefuzz
-          levenshtein 
           requests
           unidecode
           pillow
           beautifulsoup4
           rapidfuzz      # Required by syncedlyrics
+          syncedlyrics 
           lyricsgenius
-          syncedlyrics
         ]);
 
       in
@@ -92,6 +92,30 @@
             license = licenses.gpl3;
             platforms = platforms.all;
           };
+        };
+
+        packages.withConfig = configFile: pkgs.stdenv.mkDerivation rec {
+          name = "swisstag-with-config";
+          src = ./.;
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          propagatedBuildInputs = [ pythonEnv pkgs.chromaprint ];
+
+          installPhase = ''
+            mkdir -p $out/bin
+            cp swisstag.py $out/bin/swisstag
+            chmod +x $out/bin/swisstag
+            mkdir -p $out/share/man/man1
+            cp swisstag.1 $out/share/man/man1/swisstag.1
+            mkdir -p $out/etc/swisstag
+            cp ${configFile} $out/etc/swisstag/config.json
+          '';
+
+          postFixup = ''
+            sed -i '1s|^#!/usr/bin/env python3|#!${pythonEnv}/bin/python3|' $out/bin/swisstag
+            wrapProgram $out/bin/swisstag --set SWISSTAG_CONFIG $out/etc/swisstag/config.json \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.chromaprint ]}
+          '';
+
         };
 
         apps.default = flake-utils.lib.mkApp {
