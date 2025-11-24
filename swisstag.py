@@ -803,11 +803,7 @@ class Tagger:
         new_artist_list = []
         for art in current_artists:
             feats, clean_art = extract_from_string(art)
-            # Further split the cleaned artist string on commas and ampersands
-            parts = [p.strip() for p in re.split(r"\s*(?:,|&)\s*", clean_art) if p.strip()]
-            for part in parts:
-                if part not in new_artist_list: new_artist_list.append(part)
-            # Add any featured artists extracted from the string
+            if clean_art not in new_artist_list: new_artist_list.append(clean_art)
             for f in feats:
                 if f not in new_artist_list: new_artist_list.append(f)
         meta["artist"] = new_artist_list
@@ -1213,6 +1209,17 @@ class SwissTag:
             write_success = False
             if audio:
                 manual = self.parse_kv(self.args.manual_tags)
+                # Show planned tags before applying
+                try:
+                    print(f"\n{Colors.BLUE}Planned tags to apply:{Colors.RESET}")
+                    display_meta = dict(file_meta)
+                    if 'artist' in display_meta and isinstance(display_meta['artist'], list):
+                        display_meta['artist'] = self.tagger._join_artists(display_meta['artist'])
+                    for k in sorted(display_meta.keys()):
+                        print(f"  {k}: {display_meta[k]}")
+                except Exception:
+                    pass
+
                 self.tagger.apply_metadata(audio, file_meta, manual)
                 if cover_path: self.tagger.apply_cover(audio, cover_path)
                 if cover_data: self.tagger.save_cover(filepath, cover_data, album_meta['album'])
@@ -1246,6 +1253,17 @@ class SwissTag:
 
         if audio:
             manual = self.parse_kv(self.args.manual_tags)
+            # Show planned tags before applying
+            try:
+                print(f"\n{Colors.BLUE}Planned tags to apply:{Colors.RESET}")
+                display_meta = dict(meta)
+                if 'artist' in display_meta and isinstance(display_meta['artist'], list):
+                    display_meta['artist'] = self.tagger._join_artists(display_meta['artist'])
+                for k in sorted(display_meta.keys()):
+                    print(f"  {k}: {display_meta[k]}")
+            except Exception:
+                pass
+
             self.tagger.apply_metadata(audio, meta, manual)
             cover_data = None
             if self.args.cover_art == "auto" and meta.get("cover_url"):
