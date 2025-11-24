@@ -1,4 +1,4 @@
-.TH SWISSTAG 1 "November 2025" "5.1" "User Commands"
+.TH SWISSTAG 1 "November 2025" "5.2" "User Commands"
 .SH NAME
 swisstag - Automated music tagger using Genius and MusicBrainz
 
@@ -9,6 +9,8 @@ swisstag - Automated music tagger using Genius and MusicBrainz
 .SH DESCRIPTION
 .B swisstag
 is an intelligent music tagging utility that fetches metadata, lyrics, and cover art from Genius and MusicBrainz. It is designed to process single files or entire albums, handling complex tasks like feature artist splitting, band member expansion, and file renaming automatically.
+
+When processing a single \fIFILE\fR, \fBswisstag\fR automatically cleans the filename to improve search accuracy and downloads all available metadata tags (Title, Artist, Album, Year, Cover Art, Lyrics, etc.) by default.
 
 .SH OPTIONS
 
@@ -70,11 +72,15 @@ Comma-separated list of filesystem actions.
 \fBextract\fP: Extracts embedded art.
 .TP
 .BR -l ", " --lyrics \ \fIMODE\fP
+Controls lyrics fetching and saving. By default, lyrics are always fetched in \fBauto\fP mode. Use \fBskip\fP to disable fetching altogether.
+.br
 \fBembed\fP: Writes to USLT/LYRICS tag.
 .br
 \fBlrc\fP: Saves separate .lrc file.
 .br
 \fBboth\fP: Does both.
+.br
+\fBskip\fP: Explicitly skips lyrics fetching.
 .TP
 .BR -L ", " --lyrics-source \ \fISOURCE\fP
 Control source of lyrics.
@@ -96,6 +102,9 @@ Actions: \fBget\fP, \fBset\fP.
 .br
 Example: \fBswisstag -C set defaults.rename true\fP
 .TP
+.BR -S ", " --set \ \fITARGET=[VALUE]\fP
+Temporarily override configuration values for the current session without saving to the config file.
+.TP
 .BR --setup-token
 Runs the interactive wizard to set up the Genius API token.
 .TP
@@ -110,6 +119,18 @@ swisstag -a -f infer-dirs,rename
 .TP
 .B Identify a mystery file using fingerprinting:
 swisstag mystery_file.mp3 -p
+
+.TP
+.B Tag a single file (default grabs ALL tags):
+swisstag my_song.mp3
+
+.TP
+.B Tag a single file but skip lyrics:
+swisstag my_song.mp3 -l skip
+
+.TP
+.B View detailed help for search:
+swisstag -h -s
 
 .SH FILES
 .TP

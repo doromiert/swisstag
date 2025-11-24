@@ -20,7 +20,7 @@ from io import BytesIO
 
 # --- Constants & Configuration ---
 APP_NAME = "swisstag"
-VERSION = "5.1"
+VERSION = "5.2"
 # Resolve configuration file location.
 # Priority (highest -> lowest):
 # 1) SWISSTAG_CONFIG env var (full path to a config file)
@@ -53,18 +53,26 @@ DETAILED_HELP_TEXT = {
     "album": """
     --album, -a
     Switch to Album Mode.
+    
+    Fetches the full tracklist from Genius first, then matches local files to the 
+    official tracklist using fuzzy matching. Recommended for processing directories
+    containing whole albums.
     """,
     "lyrics": """
     --lyrics, -l
     Fetch and save song lyrics.
     
     Modes:
-        embed : (Default) Embeds lyrics directly into the audio file.
-        lrc   : Saves lyrics as a separate .lrc file.
+        embed : (Default) Embeds lyrics directly into the audio file (USLT/LYRICS tag).
+        lrc   : Saves lyrics as a separate .lrc file alongside the audio.
         both  : Performs both embed and lrc actions.
-    
+        skip  : Explicitly disable lyrics fetching.
+    """,
+    "lyrics-source": """
     --lyrics-source, -L
     Control where lyrics are fetched from.
+    
+    Options:
         interactive : (Default) Always ask the user to select the source for every song.
         auto        : Genius first, then synced sources. If fail, ask user.
         synced      : Force using syncedlyrics (LRC/Time-synced) sources only.
@@ -75,15 +83,114 @@ DETAILED_HELP_TEXT = {
     Use acoustic fingerprinting (AcoustID) to identify files.
     
     Requires 'fpcalc' (chromaprint) to be installed.
-    Useful for identifying files with bad filenames.
+    Useful for identifying files with bad filenames or missing tags.
     """,
+    "search": """
+    --search, -s
+    Provide manual search criteria (name, artist, url) to bypass local tag reading 
+    or directory inference. This is useful for single files with poor original tags 
+    or names.
+    
+    Format: -s KEY=VALUE
+    Example: --search artist="Kanye West" name="Yeezus"
+    """,
+    "set": """
+    --set, -S
+    Temporarily override configuration values for the current session without saving 
+    to the config file.
+    
+    Format: -S path.to.key=value
+    Example: -S defaults.rename=true
+    """,
+    "manual-tags": """
+    --manual-tags, -t
+    Manually override specific tags before applying them to the files.
+    These values take precedence over fetched metadata.
+    
+    Format: -t TAG=VALUE
+    Supported Tags: title, artist, album, year, genre, track_number
+    
+    Example: -t title="New Title" genre="Rock"
+    """,
+    "feat-handling": """
+    --feat-handling, -F
+    Controls how "feat." artists in song titles are handled during processing.
+    
+    Modes:
+        keep-title  : (Default) Moves artist to Artist tag, but leaves title as-is.
+        keep-artist : Removes artist from Title tag, but does NOT move it to Artist tag.
+        keep-both   : Warns if features detected, but modifies neither tags.
+        split       : Moves artist to Artist tag, adds "!" prefix to title (custom marker).
+        split-clean : Moves artist to Artist tag, removes from title entirely.
+    """,
+    "filesystem": """
+    --filesystem, -f
+    Comma-separated list of filesystem actions to perform.
+    
+    Options:
+        rename         : Renames files based on metadata (e.g., "Title.mp3").
+        match-filename : Matches tracks by filename similarity (Album Mode).
+        infer-dirs     : Infers Artist/Album from parent directory names.
+        autosort       : Moves files into "Artist/Album/" directory structure.
+    """,
+    "cover-art": """
+    --cover-art, -c
+    Manage cover art fetching and embedding.
+    
+    Modes:
+        auto           : Fetches cover art from Genius if available.
+        file=/path.jpg : Uses a specific local image file.
+        extract        : Extracts embedded cover art from the file (if present).
+    """,
+    "config": """
+    --config, -C
+    Manage configuration settings directly from the command line.
+    
+    Actions:
+        get path.to.key       : Print the current value of a config key.
+        set path.to.key value : Set a config key to a specific value permanently.
+    
+    Example: swisstag -C set defaults.rename true
+    """,
+    "debug": """
+    --debug, -d
+    Enable debug logging modes to troubleshoot issues.
+    
+    Modes (comma-separated):
+        dry     : Dry run (no changes applied).
+        network : Log network requests.
+        cmd     : Log shell commands.
+        vars    : Log variable states.
+        config  : Log config loading.
+        all     : Enable all debug modes.
+    """,
+    "install-deps": """
+    --install-deps
+    Automatically installs required Python dependencies via pip.
+    Useful for first-time setup.
+    """,
+    "setup-token": """
+    --setup-token
+    Runs the interactive wizard to set up the Genius API token.
+    Opens a browser window to generate a token and saves it to config.
+    """
 }
 
 HELP_MAP = {
     "-a": "album", "--album": "album",
     "-l": "lyrics", "--lyrics": "lyrics",
-    "-L": "lyrics", "--lyrics-source": "lyrics",
-    "-p": "fingerprint", "--chromaprint": "fingerprint"
+    "-L": "lyrics-source", "--lyrics-source": "lyrics-source",
+    "-p": "fingerprint", "--chromaprint": "fingerprint",
+    "-s": "search", "--search": "search",
+    "-S": "set", "--set": "set",
+    "-t": "manual-tags", "--manual-tags": "manual-tags",
+    "-F": "feat-handling", "--feat-handling": "feat-handling",
+    "-f": "filesystem", "--filesystem": "filesystem",
+    "-c": "cover-art", "--cover-art": "cover-art",
+    "-C": "config", "--config": "config",
+    "-d": "debug", "--debug": "debug",
+    "--install-deps": "install-deps",
+    "--setup-token": "setup-token"
 }
 
 # --- Dependency Management ---
@@ -236,9 +343,8 @@ class TreeUI:
             icon = f"{Colors.RED}[✗]{Colors.RESET}"
             extra_msg = "Failed"
 
-        sys.stdout.write(f"{Colors.CLR}{indent}└── {icon} {extra_msg}")
-        sys.stdout.flush()
-        print("") # Newline
+        sys.stdout.write(f"{Colors.CLR}") # Clear any pending step
+        print(f"{indent}└── {icon} {extra_msg}")
         
         if warnings:
             for w in warnings:
@@ -493,7 +599,9 @@ class MetadataProvider:
                             if 0 <= idx < len(hits):
                                 sel_id = hits[idx]['result']['id']
                                 s = self._genius_get_song(sel_id)
-                                if s: lyrics = s.lyrics
+                                if s: 
+                                    if isinstance(s, dict) and 'song' in s: s = s['song']
+                                    lyrics = get_attr(s, 'lyrics')
                         else:
                              _print("Invalid selection.")
 
@@ -591,6 +699,7 @@ class MetadataProvider:
         if not lyrics and sys.stdin.isatty():
              # Use UI if available, else standard print
              msg = f"Auto-fetch failed for: {title}"
+             # We pass UI object to be used if available
              if ui: ui.message(msg, Colors.YELLOW)
              else: print(f"\n{Colors.YELLOW}[!] {msg}{Colors.RESET}")
              
@@ -610,11 +719,9 @@ class MetadataProvider:
     def fetch_song_data(self, query: Dict, source_mode="auto") -> Dict:
         data = {"title": query.get("name"), "artist": query.get("artist")}
         
-        if source_mode == "interactive":
-            lyr = self.interactive_lyrics_picker(data['title'], data['artist'])
-            data['lyrics'] = lyr
+        # --- LOGIC: Always perform full metadata fetch for single file mode ---
         
-        # Standard Genius Metadata Fetch
+        # 1. Genius Metadata Fetch
         if self.genius and data['title'] and data['artist']:
             hits = self._genius_search_hits(data["title"], data["artist"])
             best_hit = None
@@ -622,6 +729,7 @@ class MetadataProvider:
             if hits and isinstance(hits, dict) and 'hits' in hits:
                 for hit in hits['hits']:
                     res = hit['result']
+                    # Calculate score based on fuzzy title match
                     score = fuzz.token_sort_ratio(res['title'], data['title'])
                     if score > best_score:
                         best_score = score; best_hit = res
@@ -630,24 +738,35 @@ class MetadataProvider:
                 song = self._genius_get_song(best_hit['id'])
                 if isinstance(song, dict) and 'song' in song: song = song['song']
                 
-                # Logic for Single Song Mode Lyrics
-                if not data.get('lyrics'): 
-                     data["lyrics"] = get_attr(song, 'lyrics')
-                     if not data["lyrics"] and source_mode == "auto":
-                         data["lyrics"] = self.get_synced_lyrics(data['title'], data['artist'])
-                         
-                         # Rescue for Single Mode
-                         if not data["lyrics"] and sys.stdin.isatty():
-                             print(f"\n{Colors.YELLOW}[!] Auto-fetch failed.{Colors.RESET}")
-                             if input("    Select source manually? [y/N]: ").lower() == 'y':
-                                 data["lyrics"] = self.interactive_lyrics_picker(data['title'], data['artist'])
-
+                # Update all tags based on the best Genius result
                 data["title"] = get_attr(song, 'title')
                 data["artist"] = get_attr(song, 'artist_names')
                 if get_attr(song, 'song_art_image_url'):
                     data["cover_url"] = get_attr(song, 'song_art_image_url')
                 alb = get_attr(song, 'album')
-                if alb: data["album"] = get_attr(alb, 'name')
+                if alb: 
+                    data["album"] = get_attr(alb, 'name')
+                
+                # Fetch Lyrics (Only if required by user's config/cli options)
+                if self.config.get("defaults.lyrics.fetch", True):
+                    data["lyrics"] = self.fetch_lyrics_for_track(
+                        best_hit['id'], 
+                        title=data["title"], 
+                        artist=data["artist"], 
+                        source_mode=source_mode
+                    )
+
+        # 2. Fallback/Rescue for Lyrics if they are still missing and explicitly requested
+        if self.config.get("defaults.lyrics.fetch", True) and not data.get('lyrics') and data['title'] and data['artist']:
+             if source_mode == "auto":
+                 # Try SyncedLyrics as final auto fallback
+                 data["lyrics"] = self.get_synced_lyrics(data['title'], data['artist'])
+                 
+                 # Rescue for Single Mode if auto failed and we are in a terminal
+                 if not data["lyrics"] and sys.stdin.isatty():
+                     # No UI here as this is run inside UI loop
+                     pass
+
         return data
 
     def get_acoustic_fingerprint(self, filepath: Path) -> Optional[Dict]:
@@ -856,12 +975,14 @@ class Tagger:
             return found, clean_s
 
         # FIX: Guard against NoneType error if artist is missing
-        if "artist" not in meta or meta["artist"] is None:
+        if "artist" in meta and meta["artist"] is None:
             meta["artist"] = []
-        elif isinstance(meta["artist"], str): 
+        elif "artist" in meta and isinstance(meta["artist"], str): 
             meta["artist"] = [meta["artist"]]
-        # Ensure it's always a list
-        if not isinstance(meta["artist"], list):
+        # Ensure it's always a list (or empty list if absent/None)
+        if "artist" not in meta:
+            meta["artist"] = []
+        elif not isinstance(meta["artist"], list):
             meta["artist"] = [str(meta["artist"])]
 
         # Check Title for Features
@@ -933,19 +1054,20 @@ class Tagger:
         self.expand_artist_groups(meta)
         if self.logger.is_dry: return
 
-        if "artist" in meta: meta["artist"] = self._join_artists(meta["artist"])
-        if "album_artist" in meta: meta["album_artist"] = self._join_artists(meta["album_artist"])
+        # Ensure artist fields are joined into strings before writing to file tags
+        artist_str = self._join_artists(meta.get("artist")) if meta.get("artist") else None
+        album_artist_str = self._join_artists(meta.get("album_artist")) if meta.get("album_artist") else None
 
-        if isinstance(audio, MP3): self._tag_id3(audio, meta)
-        elif isinstance(audio, FLAC): self._tag_vorbis(audio, meta)
-        elif isinstance(audio, MP4): self._tag_mp4(audio, meta)
-        
-        try: audio.save()
-        except Exception as e: self.logger.error(f"Failed to save tags: {e}")
+        if isinstance(audio, MP3): self._tag_id3(audio, meta, artist_str, album_artist_str)
+        elif isinstance(audio, FLAC): self._tag_vorbis(audio, meta, artist_str, album_artist_str)
+        elif isinstance(audio, MP4): self._tag_mp4(audio, meta, artist_str, album_artist_str)
+
+        # Do NOT call audio.save() here. It's handled in the main processing loop.
+
 
     def _should_embed(self): return self.config.get("defaults.lyrics.mode") in ['embed', 'both']
 
-    def _tag_id3(self, audio, meta):
+    def _tag_id3(self, audio, meta, artist_str, album_artist_str):
         if audio.tags is None: audio.add_tags()
         if meta.get('title'): audio.tags.add(TIT2(encoding=3, text=meta['title']))
         if meta.get('album'): audio.tags.add(TALB(encoding=3, text=meta['album']))
@@ -953,39 +1075,50 @@ class Tagger:
         if meta.get('genre'): audio.tags.add(TCON(encoding=3, text=meta['genre']))
         if meta.get('track_number'): audio.tags.add(TRCK(encoding=3, text=str(meta['track_number'])))
         if meta.get('lyrics') and self._should_embed():
+            # Remove any existing USLT tags before adding a new one
+            audio.tags.delall('USLT')
             audio.tags.add(USLT(encoding=3, lang='eng', desc='desc', text=meta['lyrics']))
-        if meta.get('artist'): audio.tags.add(TPE1(encoding=3, text=meta['artist']))
-        if meta.get('album_artist'): audio.tags.add(TPE2(encoding=3, text=meta['album_artist']))
+            
+        if artist_str: audio.tags.add(TPE1(encoding=3, text=artist_str))
+        if album_artist_str: audio.tags.add(TPE2(encoding=3, text=album_artist_str))
 
-    def _tag_vorbis(self, audio, meta):
+    def _tag_vorbis(self, audio, meta, artist_str, album_artist_str):
         if meta.get('title'): audio['title'] = meta['title']
         if meta.get('album'): audio['album'] = meta['album']
         if meta.get('year'): audio['date'] = str(meta['year'])
         if meta.get('genre'): audio['genre'] = meta['genre']
         if meta.get('track_number'): audio['tracknumber'] = str(meta['track_number'])
         if meta.get('lyrics') and self._should_embed(): audio['lyrics'] = meta['lyrics']
-        if meta.get('artist'): audio['artist'] = meta['artist']
-        if meta.get('album_artist'): audio['albumartist'] = meta['album_artist']
+        if artist_str: audio['artist'] = artist_str
+        if album_artist_str: audio['albumartist'] = album_artist_str
 
-    def _tag_mp4(self, audio, meta):
+    def _tag_mp4(self, audio, meta, artist_str, album_artist_str):
         if meta.get('title'): audio['\xa9nam'] = meta['title']
         if meta.get('album'): audio['\xa9alb'] = meta['album']
         if meta.get('year'): audio['\xa9day'] = str(meta['year'])
         if meta.get('genre'): audio['\xa9gen'] = meta['genre']
         if meta.get('lyrics') and self._should_embed(): audio['\xa9lyr'] = meta['lyrics']
-        if meta.get('artist'): audio['\xa9ART'] = meta['artist']
-        if meta.get('album_artist'): audio['aART'] = meta['album_artist']
+        if artist_str: audio['\xa9ART'] = artist_str
+        if album_artist_str: audio['aART'] = album_artist_str
 
     def apply_cover(self, audio, image_path: str):
         if self.logger.is_dry or not image_path: return
         try:
             with open(image_path, 'rb') as f: img_data = f.read()
-            if isinstance(audio, MP3): audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover', data=img_data))
+            
+            # Clear existing cover art tags before adding a new one
+            if isinstance(audio, MP3): 
+                 audio.tags.delall('APIC')
+                 audio.tags.add(APIC(encoding=3, mime='image/jpeg', type=3, desc='Cover', data=img_data))
             elif isinstance(audio, FLAC):
+                # FLAC/Vorbis handles pictures differently (clearing is manual)
+                audio.pictures = []
                 p = Picture(); p.type = 3; p.mime = "image/jpeg"; p.desc = "Cover"; p.data = img_data
                 audio.add_picture(p)
-            elif isinstance(audio, MP4): audio['covr'] = [MP4Cover(img_data, imageformat=MP4Cover.FORMAT_JPEG)]
-            audio.save()
+            elif isinstance(audio, MP4): 
+                audio['covr'] = [MP4Cover(img_data, imageformat=MP4Cover.FORMAT_JPEG)]
+            
+            # Do NOT call audio.save() here. It's handled in the main processing loop.
         except Exception as e: self.logger.error(f"Cover apply error: {e}")
 
     def save_cover(self, audio_file_path: Path, image_data: bytes, album_name: str):
@@ -1013,40 +1146,82 @@ class Tagger:
 
 class SwissTag:
     def __init__(self):
-        self.check_extended_help()
-        self.args = self.parse_args()
+        
+        # Determine if help flags are present in sys.argv
+        help_present = any(h in sys.argv for h in ["-h", "--help"])
+        
+        if help_present:
+            # 1. Filter out help flags for non-destructive parsing
+            # This allows us to check for other flags without triggering help-exit or parsing errors
+            filtered_argv = [arg for arg in sys.argv if arg not in ["-h", "--help"]]
+            
+            # 2. Handle Help
+            # We pass the filtered list (excluding script name) to analyze which flags were present
+            self.check_extended_help(filtered_argv[1:])
+            # Exits inside check_extended_help, but ensure it exits cleanly if needed.
+            sys.exit(0) 
+            
+        # --- Normal Execution Path (No Help Requested) ---
+            
+        # 1. Actual Parsing: If we reached here, no help was requested.
+        try:
+             self.args = self._create_parser(add_help=True).parse_args()
+        except SystemExit:
+             # If argparse catches an error (like missing required arguments), it raises SystemExit.
+             # We should rely on argparse to print the error message and exit cleanly.
+             sys.exit(2)
+        
+        # --- Initialization continues if no SystemExit occurred ---
         self.config = ConfigManager(self.args.temp_set)
         
+        # 2. Apply CLI overrides for mode/source
         if self.args.lyrics: self.config.set("defaults.lyrics.mode", self.args.lyrics)
         if self.args.lyrics_source: self.config.set("defaults.lyrics.source", self.args.lyrics_source)
         if self.args.feat_handling: self.config.set("defaults.feat_handling", self.args.feat_handling)
         
+        # 3. Control Lyrics Fetching Flag
+        if self.args.lyrics == "skip":
+             self.config.set("defaults.lyrics.fetch", False)
+        else:
+             self.config.set("defaults.lyrics.fetch", True)
+
+
         if self.args.setup_token: TokenWizard.run(self.config); sys.exit(0)
         if self.args.config_action: self.handle_config_action(); sys.exit(0)
         
         self.logger = Logger(self.args.debug)
         self.meta_provider = MetadataProvider(self.config, self.logger)
+        self.meta_provider.args = self.args
         self.file_handler = FileHandler(self.config, self.logger)
         self.tagger = Tagger(self.config, self.logger)
 
-    def check_extended_help(self):
-        if "-h" in sys.argv or "--help" in sys.argv:
-            other_args = [a for a in sys.argv if a not in ["-h", "--help", sys.argv[0]]]
-            if not other_args: return 
-            found_topics = []
-            for arg in sys.argv:
-                if arg in ["-h", "--help", sys.argv[0]]: continue
-                clean_arg = arg.split('=')[0]
-                if clean_arg in HELP_MAP: found_topics.append(HELP_MAP[clean_arg])
-            if found_topics:
-                print(f"\n{APP_NAME} v{VERSION} - Detailed Help\n")
-                seen = set()
-                for topic in found_topics:
-                    if topic not in seen: print(DETAILED_HELP_TEXT[topic]); seen.add(topic)
-                sys.exit(0)
+    def check_extended_help(self, filtered_args):
+        # This function is now only called if -h or --help is detected in sys.argv.
+        
+        found_topics = []
+        for arg in filtered_args:
+            clean_arg = arg.split('=')[0]
+            if clean_arg in HELP_MAP: 
+                topic = HELP_MAP[clean_arg]
+                if topic not in found_topics:
+                    found_topics.append(topic)
+        
+        if found_topics:
+            # DETAILED HELP MODE
+            print(f"\n{APP_NAME} v{VERSION} - Detailed Help\n")
+            for topic in found_topics:
+                print(DETAILED_HELP_TEXT[topic])
+            sys.exit(0) # Explicit exit
+        else:
+            # GENERAL HELP MODE (No specific topic requested)
+            # Create a parser with add_help=True to display the standard help message
+            parser = self._create_parser(add_help=True)
+            parser.print_help()
+            sys.exit(0) # Explicit exit
 
-    def parse_args(self):
-        parser = argparse.ArgumentParser(description="Swisstag: Automated Music Tagger")
+    def _create_parser(self, add_help=False):
+        # Helper function to create the ArgumentParser instance
+        parser = argparse.ArgumentParser(description="Swisstag: Automated Music Tagger", add_help=add_help)
         parser.add_argument("inputs", nargs="*", default=["."], help="Files or directories")
         parser.add_argument("--install-deps", action="store_true", help="Install dependencies")
         parser.add_argument("--setup-token", action="store_true", help="Setup Genius Token")
@@ -1056,7 +1231,7 @@ class SwissTag:
         parser.add_argument("-F", "--feat-handling", choices=['split', 'split-clean', 'keep-title', 'keep-artist', 'keep-both'], default="keep-title")
         parser.add_argument("-f", "--filesystem", help="rename, match-filename, infer-dirs, autosort")
         parser.add_argument("-c", "--cover-art", help="auto, file=path, extract")
-        parser.add_argument("-l", "--lyrics", help="embed, lrc, both")
+        parser.add_argument("-l", "--lyrics", help="embed, lrc, both, skip")
         parser.add_argument("-L", "--lyrics-source", choices=['auto', 'interactive', 'synced', 'genius'], help="auto, interactive, synced, genius")
         parser.add_argument("-p", "--chromaprint", action="store_true", help="Use acoustic fingerprinting")
         parser.add_argument("-d", "--debug", nargs="?", const="dry", help="dry, network, cmd, vars, all")
@@ -1064,7 +1239,17 @@ class SwissTag:
         parser.add_argument("-S", "--set", dest="temp_set", nargs="+", help="temp config")
         parser.add_argument("--about", action="store_true")
         parser.add_argument("-v", "--version", action="store_true")
-        return parser.parse_args()
+        
+        # Manually add the help flag if add_help=False so we can detect it in sys.argv
+        if not add_help:
+             parser.add_argument("-h", "--help", action='store_const', const=True, help=argparse.SUPPRESS)
+             
+        return parser
+
+    def parse_args(self, add_help=False):
+        # Deprecated: use _create_parser instead
+        return self._create_parser(add_help).parse_args()
+
 
     def handle_config_action(self):
         action = self.args.config_action[0]
@@ -1077,12 +1262,25 @@ class SwissTag:
     def parse_kv(self, items: List[str]) -> Dict[str, str]:
         if not items: return {}
         res = {}
-        for i in items:
-            if "=" in i: k, v = i.split("=", 1); res[k] = v
+        for item in items:
+            # 1. Split the argument by commas to handle cases like -s tag1=val1,tag2=val2
+            sub_items = [s.strip() for s in item.split(',')]
+            for sub_item in sub_items:
+                if "=" in sub_item: 
+                    k, v = sub_item.split("=", 1)
+                    # Remove quotes if present
+                    if v.startswith('"') and v.endswith('"'): v = v[1:-1]
+                    elif v.startswith("'") and v.endswith("'"): v = v[1:-1]
+                    res[k] = v
         return res
 
     def run(self):
-        if self.args.about or self.args.version: print(f"{APP_NAME} v{VERSION}"); return
+        if self.args.about:
+            print(f"{APP_NAME} v{VERSION} - advanced mass retagging utility designed by doromiert and coded by gemini")
+            return
+        if self.args.version: 
+            print(f"{APP_NAME} v{VERSION}")
+            return
         
         fs_opts = self.args.filesystem.split(',') if self.args.filesystem else []
 
@@ -1124,39 +1322,196 @@ class SwissTag:
             elif mode == 'single':
                 self.run_single_mode(path, fs_opts)
 
-    def run_single_mode(self, filepath: Path, fs_opts: List[str]):
-        self.logger.info(f"Processing: {filepath.name}")
-        query = {}
+    def _clean_filename_for_search(self, filename: str) -> str:
+        """Removes common noise from filenames before using them as search queries."""
+        # 1. Remove Bracketed/Parenthesized content that is not explicitly feature (which is handled later)
+        cleaned = re.sub(r'\s*[\(\[].*?(Official Music Video|Lyrics|Audio|Explicit|Remix|Live|\d+kbps).*?[\)\]]', '', filename, flags=re.IGNORECASE)
+        # Remove any lingering brackets/IDs
+        cleaned = re.sub(r'\s*[\(\[].*?[\)\]]', '', cleaned)
+        # Remove leading numbers/hyphens (track numbers)
+        cleaned = re.sub(r'^\s*\d+\s*[-.]?\s*', '', cleaned).strip()
         
+        return cleaned
+
+    def run_single_mode(self, filepath: Path, fs_opts: List[str]):
+        """
+        Processes a single file, using the TreeUI structure for cleaner, album-mode-like output.
+        """
+        # Setup TreeUI for a single item
+        ui = TreeUI(total=1)
+        ui.next(f"{filepath.name}")
+
+        query = {}
         # 0. Pre-fill from existing tags
         existing = self.tagger.read_existing_metadata(filepath)
         query.update(existing)
 
-        # Fingerprint Check
+        # 1. Fingerprint Check
         if self.args.chromaprint:
+            ui.step("Checking acoustic fingerprint...")
             fp_data = self.meta_provider.get_acoustic_fingerprint(filepath)
             if fp_data:
-                print(f"{Colors.GREEN}Fingerprint matched:{Colors.RESET} {fp_data['title']} - {fp_data['artist']}")
+                ui.message(f"Fingerprint matched: {fp_data['title']} - {fp_data['artist']}", Colors.GREEN)
                 query['name'] = fp_data['title']
                 query['artist'] = fp_data['artist']
                 query['album'] = fp_data.get('album')
-                query['mb_id'] = True # Marker
+                query['duration'] = fp_data.get('duration')
+                query['mb_id'] = True
             else:
-                print(f"{Colors.RED}Fingerprint match failed.{Colors.RESET}")
+                ui.message("Fingerprint match failed.", Colors.RED)
 
         if self.args.search: query.update(self.parse_kv(self.args.search))
-        if 'infer-dirs' in fs_opts and not query.get('artist'): query.update(self.file_handler.infer_dirs(filepath))
+        if 'infer-dirs' in fs_opts and not query.get('artist'): 
+            inferred = self.file_handler.infer_dirs(filepath)
+            query.update(inferred)
+            if inferred: ui.message(f"Inferred Artist/Album: {inferred.get('artist')} / {inferred.get('album')}")
         
-        # Ensure we have a name/title to search with
-        if not query.get('name') and not query.get('title'): 
-             query['name'] = re.sub(r"\[.*?\]|^\d+\s*-\s*", "", filepath.stem).strip()
-        elif query.get('title') and not query.get('name'):
-             query['name'] = query['title']
+        # Determine the CLEAN search name (Priority: Existing Tag > Cleaned Filename)
+        search_name = query.get('name') or query.get('title')
+        if not search_name: 
+             # Use the cleaned filename stem for the initial search query
+             search_name = self._clean_filename_for_search(filepath.stem)
+             query['name'] = search_name # Use the clean name for the search API call
+             ui.message(f"Cleaned filename for search: {search_name}", Colors.BLUE)
+        
+        if not query.get('name') and not query.get('artist'):
+             ui.finish(status='error', warnings=["Could not determine track name or artist. Cannot search."])
+             return
 
         lyr_src = self.config.get("defaults.lyrics.source", "interactive")
+        
+        # 2. Fetch ALL available metadata
+        ui.step("Searching online for ALL metadata...")
         meta = self.meta_provider.fetch_song_data(query, source_mode=lyr_src)
         
-        self._process_and_apply(filepath, meta, fs_opts)
+        if query.get('duration'): meta['duration'] = query['duration']
+
+        # 3. Apply/Save Logic 
+        audio = self.tagger.load_file(filepath)
+        success = False
+        warnings = []
+        has_lyrics = False
+
+        if not audio:
+            warnings.append("Could not load audio file.")
+        else:
+            manual = self.parse_kv(self.args.manual_tags)
+            
+            # --- Tag Preparation ---
+            # If online search failed, the resulting 'meta' dictionary may be empty.
+            # We must ensure Title/Artist are set using the best available info (existing tags or filename).
+            if not meta.get('title'):
+                # If online fetch didn't yield a title, fall back to the cleanest name we derived.
+                meta['title'] = search_name
+            # Fallback artist if online failed but local tags or inference gave one
+            if not meta.get('artist') and existing.get('artist'):
+                meta['artist'] = existing['artist']
+            
+            # Show planned tags before applying
+            display_meta = {k: v for k, v in meta.items() if k not in ['lyrics', 'duration']}
+            
+            # Use Tagger helper to join artist lists for display consistency
+            if 'artist' in display_meta:
+                 if isinstance(display_meta['artist'], list):
+                    display_meta['artist'] = self.tagger._join_artists(display_meta['artist'])
+                 elif isinstance(display_meta['artist'], str) and ',' in display_meta['artist']:
+                    # This is for display consistency, the actual tagging handles lists/strings later
+                    display_meta['artist'] = display_meta['artist'].replace(',', self.config.get("separators.artist", "; "))
+
+            ui.message(f"Planned tags:", color=Colors.BLUE)
+            for k in sorted(display_meta.keys()):
+                ui.message(f"  {k}: {display_meta[k]}", color=Colors.BLUE)
+
+            ui.step("Applying tags...")
+            self.tagger.apply_metadata(audio, meta, manual)
+            
+            # Cover Art Logic
+            cover_data = None
+            cover_path = None
+            cover_config = self.args.cover_art or self.config.get("defaults.cover")
+            
+            if cover_config and cover_config != "extract":
+                 if self.args.cover_art == "auto" and meta.get("cover_url"):
+                     ui.step("Fetching cover art...")
+                     try:
+                        r = requests.get(meta["cover_url"])
+                        tmp_art = Path("/tmp/swisstag_cover.jpg")
+                        cover_data = r.content
+                        with open(tmp_art, 'wb') as f: f.write(r.content)
+                        cover_path = str(tmp_art)
+                        self.tagger.apply_cover(audio, cover_path)
+                        ui.message("Embedded cover art.", Colors.GREEN)
+                     except Exception: 
+                         warnings.append("Failed to fetch/embed cover art.")
+                         ui.message("Failed to fetch/embed cover art.", Colors.RED)
+                 elif self.args.cover_art and self.args.cover_art.startswith("file="):
+                     cover_path = self.args.cover_art.split("=", 1)[1]
+                     ui.step(f"Using local cover: {Path(cover_path).name}...")
+                     self.tagger.apply_cover(audio, cover_path)
+            
+            # Save the file immediately after applying tags/cover, but before FS ops
+            try:
+                if not self.logger.is_dry:
+                    audio.save()
+                    ui.message("Tags saved to file.", Colors.GREEN)
+                else:
+                    ui.message("Tags applied (Dry Run).", Colors.BLUE)
+                
+                success = True
+            except Exception as e:
+                warnings.append(f"Failed to save tags to file: {e}")
+                ui.message(f"ERROR: Failed to save tags to file: {e}", Colors.RED)
+                success = False
+
+            if cover_data and meta.get("album"): 
+                self.tagger.save_cover(filepath, cover_data, meta["album"])
+                ui.message("Saved cover art to file.", Colors.GREEN)
+            elif cover_data: 
+                self.tagger.save_cover(filepath, cover_data, "Unknown Album")
+                ui.message("Saved cover art to file (Unknown Album).", Colors.GREEN)
+
+            # Filesystem Operations (Only if save succeeded)
+            if success:
+                if 'rename' in fs_opts or self.config.get("defaults.rename"):
+                    ui.step("Renaming file...")
+                    new_path = self.file_handler.rename_file(filepath, meta)
+                    if new_path != filepath:
+                        ui.message(f"Renamed to: {new_path.name}", Colors.GREEN)
+                    filepath = new_path
+                
+                if 'autosort' in fs_opts:
+                    ui.step("Sorting file...")
+                    new_path = self.file_handler.autosort(filepath, meta)
+                    if new_path != filepath:
+                        ui.message(f"Moved to: {new_path.parent.name} / {new_path.parent.parent.name}", Colors.GREEN)
+                    filepath = new_path
+                
+                # Lyrics Save
+                if self.config.get("defaults.lyrics.fetch", True):
+                    if meta.get('lyrics'):
+                        has_lyrics = True
+                        l_mode = self.config.get("defaults.lyrics.mode")
+                        if l_mode in ['lrc', 'both']: 
+                            ui.step(f"Saving lyrics as .lrc...")
+                            self.file_handler.save_lrc(filepath, meta['lyrics'])
+                            ui.message("Saved .lrc file.", Colors.GREEN)
+                        if l_mode in ['embed', 'both']:
+                            ui.message("Embedded lyrics.", Colors.GREEN)
+                    else:
+                        warnings.append("Lyrics were expected but not found/fetched.")
+
+                # Duration Validation Check (if chromaprint was used)
+                if audio and meta.get('duration'):
+                     local_dur = audio.info.length
+                     if abs(local_dur - int(meta['duration'])) > 10:
+                         warnings.append(f"Duration mismatch: Local {int(local_dur)}s vs Remote {meta['duration']}s")
+
+        # 4. Final Status
+        status = 'success'
+        if not success: status = 'error'
+        elif warnings: status = 'warning'
+        
+        ui.finish(status, warnings)
 
     def manual_match_interface(self, files, tracks):
         matched = []
@@ -1249,18 +1604,21 @@ class SwissTag:
             print(f"{Colors.BOLD}Created list at: {missing_file}{Colors.RESET}\n")
 
         cover_path = None; cover_data = None
-        if self.args.cover_art == "auto" and album_meta.get("cover_url"):
-            try:
-                r = requests.get(album_meta["cover_url"])
-                cover_path = "/tmp/swisstag_cover.jpg"
-                cover_data = r.content 
-                with open(cover_path, 'wb') as f: f.write(r.content)
-            except Exception: pass
-        elif self.args.cover_art and self.args.cover_art.startswith("file="):
-            cover_path = self.args.cover_art.split("=", 1)[1]
-            try:
-                with open(cover_path, 'rb') as f: cover_data = f.read()
-            except: pass
+        # Check if cover fetching is requested or not explicitly disabled
+        cover_config = self.args.cover_art or self.config.get("defaults.cover")
+        if cover_config and cover_config != "extract": # Extract handled later
+            if self.args.cover_art == "auto" and album_meta.get("cover_url"):
+                try:
+                    r = requests.get(album_meta["cover_url"])
+                    cover_path = "/tmp/swisstag_cover.jpg"
+                    cover_data = r.content 
+                    with open(cover_path, 'wb') as f: f.write(r.content)
+                except Exception: pass
+            elif self.args.cover_art and self.args.cover_art.startswith("file="):
+                cover_path = self.args.cover_art.split("=", 1)[1]
+                try:
+                    with open(cover_path, 'rb') as f: cover_data = f.read()
+                except Exception: pass
 
         inferred_artist = query.get('artist') if 'infer-dirs' in fs_opts else None
         ui = TreeUI(len(matched_pairs), album_name=selected_title)
@@ -1283,11 +1641,12 @@ class SwissTag:
                 "album_artist": a_artist_list, "year": album_meta['year'], "genre": album_meta['genre']
             }
             
-            ui.step("Fetching lyrics...")
-            # Pass UI to fetch_lyrics_for_track so interactive prompts respect the tree
-            lyrics = self.meta_provider.fetch_lyrics_for_track(track['id'], title=track['title'], artist=track['artist'], source_mode=lyr_src, ui=ui)
-            has_lyrics = bool(lyrics)
-            if lyrics: file_meta['lyrics'] = lyrics
+            # Fetch lyrics only if requested
+            has_lyrics = False
+            if self.config.get("defaults.lyrics.fetch", True):
+                ui.step("Fetching lyrics...")
+                lyrics = self.meta_provider.fetch_lyrics_for_track(track['id'], title=track['title'], artist=track['artist'], source_mode=lyr_src, ui=ui)
+                if lyrics: file_meta['lyrics'] = lyrics; has_lyrics = True
             
             ui.step("Applying tags...")
             audio = self.tagger.load_file(filepath)
@@ -1303,6 +1662,7 @@ class SwissTag:
             write_success = False
             if audio:
                 manual = self.parse_kv(self.args.manual_tags)
+                
                 # Show planned tags before applying
                 try:
                     # Filter out lyrics from display
@@ -1313,14 +1673,27 @@ class SwissTag:
                     
                     ui.message(f"Planned tags:", color=Colors.BLUE)
                     for k in sorted(display_meta.keys()):
-                        ui.message(f"{k}: {display_meta[k]}", color=Colors.BLUE)
+                        ui.message(f"  {k}: {display_meta[k]}", color=Colors.BLUE)
                 except Exception:
                     pass
 
                 self.tagger.apply_metadata(audio, file_meta, manual, ui=ui)
                 if cover_path: self.tagger.apply_cover(audio, cover_path)
                 if cover_data: self.tagger.save_cover(filepath, cover_data, album_meta['album'])
-                write_success = True
+                
+                # SAVE FILE
+                try:
+                    if not self.logger.is_dry:
+                        audio.save()
+                        ui.message("Tags saved to file.", Colors.GREEN)
+                    else:
+                        ui.message("Tags applied (Dry Run).", Colors.BLUE)
+                    write_success = True
+                except Exception as e:
+                    warnings.append(f"Failed to save tags to file: {e}")
+                    ui.message(f"ERROR: Failed to save tags to file: {e}", Colors.RED)
+                    write_success = False
+
             
             if 'rename' in fs_opts or self.config.get("defaults.rename"):
                 ui.step("Renaming...")
@@ -1336,73 +1709,11 @@ class SwissTag:
             
             status = 'success'
             if not write_success: status = 'error'
-            elif self.args.lyrics and not has_lyrics: 
+            elif self.config.get("defaults.lyrics.fetch", True) and not has_lyrics: 
                 status = 'warning'
                 warnings.append("Missing lyrics")
 
             ui.finish(status, warnings)
-
-    def _process_and_apply(self, filepath, meta, fs_opts):
-        audio = self.tagger.load_file(filepath)
-        success = True
-        has_lyrics = False
-        warnings = []
-
-        if audio:
-            manual = self.parse_kv(self.args.manual_tags)
-            # Show planned tags before applying
-            try:
-                print(f"\n{Colors.BLUE}Planned tags to apply:{Colors.RESET}")
-                # Filter out lyrics from display here as well for single mode consistency
-                display_meta = {k: v for k, v in meta.items() if k != 'lyrics'}
-                
-                if 'artist' in display_meta and isinstance(display_meta['artist'], list):
-                    display_meta['artist'] = self.tagger._join_artists(display_meta['artist'])
-                for k in sorted(display_meta.keys()):
-                    print(f"  {k}: {display_meta[k]}")
-            except Exception:
-                pass
-
-            self.tagger.apply_metadata(audio, meta, manual)
-            cover_data = None
-            if self.args.cover_art == "auto" and meta.get("cover_url"):
-                 try:
-                    r = requests.get(meta["cover_url"])
-                    tmp_art = Path("/tmp/swisstag_cover.jpg")
-                    cover_data = r.content
-                    with open(tmp_art, 'wb') as f: f.write(r.content)
-                    self.tagger.apply_cover(audio, str(tmp_art))
-                 except Exception: pass
-
-            if cover_data: self.tagger.save_cover(filepath, cover_data, meta.get("album", "Unknown Album"))
-
-            if 'rename' in fs_opts or self.config.get("defaults.rename"):
-                filepath = self.file_handler.rename_file(filepath, meta)
-            
-            if 'autosort' in fs_opts:
-                filepath = self.file_handler.autosort(filepath, meta)
-            
-            if meta.get('lyrics'):
-                has_lyrics = True
-                l_mode = self.config.get("defaults.lyrics.mode")
-                if l_mode in ['lrc', 'both']: self.file_handler.save_lrc(filepath, meta['lyrics'])
-        else:
-            success = False
-
-        if success:
-            if self.args.lyrics and not has_lyrics:
-                print(f"{Colors.YELLOW}[!] Finished {filepath.name} (Missing Lyrics){Colors.RESET}")
-            else:
-                print(f"{Colors.GREEN}[✓] Finished {filepath.name}{Colors.RESET}")
-            
-            # Duration Validation Check for Single File
-            if audio and meta.get('duration'): # If we got duration from chromaprint
-                 local_dur = audio.info.length
-                 if abs(local_dur - int(meta['duration'])) > 10:
-                     print(f"    {Colors.YELLOW}↳ Duration mismatch: Local {int(local_dur)}s vs Remote {meta['duration']}s{Colors.RESET}")
-
-        else:
-            print(f"{Colors.RED}[✗] Failed {filepath.name}{Colors.RESET}")
 
 if __name__ == "__main__":
     try:

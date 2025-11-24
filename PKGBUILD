@@ -1,7 +1,7 @@
 # Maintainer: doromiert <doromiert@gmail.com>
 
 pkgname=swisstag-git
-pkgver=5.1.r0.g1234567
+pkgver=5.2.r0.g1234567
 pkgrel=1
 pkgdesc="Automated music tagger using Genius and MusicBrainz"
 arch=('any')
