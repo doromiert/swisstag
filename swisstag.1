@@ -1,4 +1,4 @@
-.TH SWISSTAG 1 "November 2025" "5.0" "User Commands"
+.TH SWISSTAG 1 "November 2025" "5.1" "User Commands"
 .SH NAME
 swisstag - Automated music tagger using Genius and MusicBrainz
 
@@ -37,7 +37,11 @@ Tags: \fItitle\fP, \fIartist\fP, \fIalbum\fP, \fIyear\fP, \fIgenre\fP.
 .BR -F ", " --feat-handling \ \fIMODE\fP
 Controls how "feat." artists in song titles are handled.
 .br
-\fBkeep\fP: Leaves title as-is (e.g., "Song (feat. X)").
+\fBkeep-title\fP: (Default) Moves artist to Artist tag, but leaves title as-is.
+.br
+\fBkeep-artist\fP: Removes artist from Title tag, but does NOT move it to Artist tag.
+.br
+\fBkeep-both\fP: Warns if features detected, but modifies neither Title nor Artist tags.
 .br
 \fBsplit\fP: Moves artist to Artist tag, adds "!" prefix to title.
 .br

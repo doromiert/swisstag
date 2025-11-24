@@ -20,7 +20,7 @@ from io import BytesIO
 
 # --- Constants & Configuration ---
 APP_NAME = "swisstag"
-VERSION = "5.0.1"
+VERSION = "5.1"
 # Resolve configuration file location.
 # Priority (highest -> lowest):
 # 1) SWISSTAG_CONFIG env var (full path to a config file)
@@ -150,13 +150,14 @@ DEFAULT_CONFIG = {
     "defaults": {
         "rename": False,
         "match_filename": True,
-        "feat_handling": "split",
+        "feat_handling": "keep-title",
         "lyrics": {"fetch": True, "mode": "embed", "source": "interactive"},
         "cover": {"size": "1920x1920", "keep_resized": True, "extract": {"crop": False, "scale": True}}
     },
     "separators": {"artist": "; ", "genre": "; "},
     "regex": {"featured_artist": r"(?i)[(\[](?:feat|ft|featuring|with)\.?\s+(.*?)[)\]]"},
     "artist_groups": {},
+    "aliases": {},
     "api_keys": {
         "genius": "",
         "acoustid": "cSpUJKpD" # Default generic key
@@ -197,13 +198,33 @@ class TreeUI:
         # Print basic title first
         print(f"{self.root_indent}{self.prefix} {title} ({self.idx}/{self.total})")
 
+    def _get_sub_indent(self):
+        # Calculate indentation for children messages based on current prefix
+        if "├" in self.prefix:
+            return self.root_indent + "│   "
+        return self.root_indent + "    "
+
     def step(self, msg):
-        indent = "    " if self.prefix == "└──" else "│   "
-        sys.stdout.write(f"{Colors.CLR}{self.root_indent}{indent}└── {msg}")
+        indent = self._get_sub_indent()
+        sys.stdout.write(f"{Colors.CLR}{indent}└── {msg}")
         sys.stdout.flush()
 
+    def message(self, text, color=None):
+        # Permanent message that respects tree structure
+        indent = self._get_sub_indent()
+        c = color if color else ""
+        r = Colors.RESET if color else ""
+        sys.stdout.write(f"{Colors.CLR}") # Clear any pending step
+        print(f"{indent}│ {c}{text}{r}")
+
+    def ask(self, prompt_text):
+        # Input prompt that respects tree structure
+        indent = self._get_sub_indent()
+        sys.stdout.write(f"{Colors.CLR}") # Clear any pending step
+        return input(f"{indent}│ {prompt_text}")
+
     def finish(self, status: str = 'success', warnings: List[str] = None):
-        indent = "    " if self.prefix == "└──" else "│   "
+        indent = self._get_sub_indent()
         
         icon = f"{Colors.GREEN}[✓]{Colors.RESET}"
         
@@ -215,13 +236,13 @@ class TreeUI:
             icon = f"{Colors.RED}[✗]{Colors.RESET}"
             extra_msg = "Failed"
 
-        sys.stdout.write(f"{Colors.CLR}{self.root_indent}{indent}└── {icon} {extra_msg}")
+        sys.stdout.write(f"{Colors.CLR}{indent}└── {icon} {extra_msg}")
         sys.stdout.flush()
         print("") # Newline
         
         if warnings:
             for w in warnings:
-                print(f"{self.root_indent}{indent}    {Colors.YELLOW}↳ {w}{Colors.RESET}")
+                print(f"{indent}    {Colors.YELLOW}↳ {w}{Colors.RESET}")
 
 class ConfigManager:
     def __init__(self, cli_overrides: List[str] = None):
@@ -424,20 +445,30 @@ class MetadataProvider:
                 return None
             raise
 
-    def interactive_lyrics_picker(self, title, artist) -> Optional[str]:
+    def interactive_lyrics_picker(self, title, artist, ui: Optional['TreeUI'] = None) -> Optional[str]:
         """
         Interactive Wizard to choose lyrics source with Retry Loop.
+        If ui is provided, uses tree-aligned output.
         """
+        def _print(msg, color=None):
+            if ui: ui.message(msg, color)
+            else: print(f"{color if color else ''}{msg}{Colors.RESET if color else ''}")
+
+        def _input(msg):
+            if ui: return ui.ask(msg)
+            return input(msg)
+
         # Clear the previous line to make the UI cleaner if called in a loop
-        print(f"\n{Colors.BLUE}--- Lyrics Selection: {title} ---{Colors.RESET}")
+        if not ui: print(f"\n{Colors.BLUE}--- Lyrics Selection: {title} ---{Colors.RESET}")
+        else: _print(f"Lyrics Selection: {title}", Colors.BLUE)
         
         while True:
-            print(f"[s] Skip lyrics for this song")
-            print(f"[1] Genius")
-            print(f"[2] SyncedLyrics (LRC)")
-            print(f"[3] Manual Input")
+            _print("[s] Skip lyrics for this song")
+            _print("[1] Genius")
+            _print("[2] SyncedLyrics (LRC)")
+            _print("[3] Manual Input")
             
-            mode = input("Select source: ").strip().lower()
+            mode = _input("Select source: ").strip().lower()
             
             if mode == 's': return None
             
@@ -447,15 +478,15 @@ class MetadataProvider:
             if mode == '1':
                 hits_raw = self._genius_search_hits(title, artist)
                 if not hits_raw or 'hits' not in hits_raw:
-                    print(f"{Colors.YELLOW}No Genius results found.{Colors.RESET}")
+                    _print("No Genius results found.", Colors.YELLOW)
                 else:
                     hits = hits_raw['hits']
                     for i, hit in enumerate(hits):
                         res = hit['result']
-                        print(f"  [{i+1}] {res['full_title']}")
-                    print(f"  [b] Back")
+                        _print(f"[{i+1}] {res['full_title']}")
+                    _print("[b] Back")
                     
-                    sub = input("Select song (1-5): ").strip().lower()
+                    sub = _input("Select song (1-5): ").strip().lower()
                     if sub != 'b':
                         if sub.isdigit():
                             idx = int(sub) - 1
@@ -464,34 +495,34 @@ class MetadataProvider:
                                 s = self._genius_get_song(sel_id)
                                 if s: lyrics = s.lyrics
                         else:
-                             print("Invalid selection.")
+                             _print("Invalid selection.")
 
             # 2. SYNCEDLYRICS SEARCH
             elif mode == '2':
-                print("Searching providers...")
+                _print("Searching providers...")
                 lyrics = self.get_synced_lyrics(title, artist)
                 if not lyrics:
-                    print(f"{Colors.YELLOW}No synced lyrics found.{Colors.RESET}")
+                    _print("No synced lyrics found.", Colors.YELLOW)
                 else:
-                    print(f"Found lyrics ({len(lyrics)} chars).")
+                    _print(f"Found lyrics ({len(lyrics)} chars).")
 
             # 3. MANUAL INPUT
             elif mode == '3':
-                print("Paste lyrics below (Press Ctrl+D or Ctrl+Z on new line to finish):")
+                _print("Paste lyrics below (Press Ctrl+D or Ctrl+Z on new line to finish):")
                 try:
                     lines = sys.stdin.read()
                     lyrics = lines if lines.strip() else None
                 except: pass
 
             else:
-                print("Invalid option.")
+                _print("Invalid option.")
 
             if lyrics:
                 return lyrics
             
             # Retry Prompt
-            print(f"{Colors.YELLOW}Search failed or cancelled.{Colors.RESET}")
-            retry = input("Do you want to retry searching for lyrics? [Y/n]: ").strip().lower()
+            _print("Search failed or cancelled.", Colors.YELLOW)
+            retry = _input("Do you want to retry searching for lyrics? [Y/n]: ").strip().lower()
             if retry == 'n':
                 return None
             # Loop continues otherwise
@@ -510,10 +541,10 @@ class MetadataProvider:
             self.logger.warn(f"Synced lyrics search failed: {e}")
         return None
 
-    def fetch_lyrics_for_track(self, track_id, title=None, artist=None, source_mode="auto") -> str:
+    def fetch_lyrics_for_track(self, track_id, title=None, artist=None, source_mode="auto", ui: Optional['TreeUI'] = None) -> str:
         # 1. INTERACTIVE MODE (Explicitly requested OR Default)
         if source_mode == "interactive":
-            return self.interactive_lyrics_picker(title, artist)
+            return self.interactive_lyrics_picker(title, artist, ui=ui)
         
         # 2. SYNCED ONLY
         if source_mode == "synced":
@@ -558,11 +589,17 @@ class MetadataProvider:
              
         # D. Interactive Rescue (If Auto failed and we are in a terminal)
         if not lyrics and sys.stdin.isatty():
-             print(f"\n{Colors.YELLOW}[!] Auto-fetch failed for: {title}{Colors.RESET}")
+             # Use UI if available, else standard print
+             msg = f"Auto-fetch failed for: {title}"
+             if ui: ui.message(msg, Colors.YELLOW)
+             else: print(f"\n{Colors.YELLOW}[!] {msg}{Colors.RESET}")
+             
              # Ask user if they want to manually intervene
-             choice = input("    Select source manually? [y/N]: ").strip().lower()
+             if ui: choice = ui.ask("Select source manually? [y/N]: ").strip().lower()
+             else: choice = input("    Select source manually? [y/N]: ").strip().lower()
+             
              if choice == 'y':
-                 lyrics = self.interactive_lyrics_picker(title, artist)
+                 lyrics = self.interactive_lyrics_picker(title, artist, ui=ui)
 
         if lyrics:
             self.logger.log("vars", f"Lyrics len: {len(lyrics)}")
@@ -757,9 +794,45 @@ class Tagger:
             return f.info.length if f and f.info else 0.0
         except: return 0.0
 
-    def handle_features(self, meta: Dict):
+    def apply_aliases(self, meta: Dict):
+        aliases = self.config.get("aliases", {})
+        if not aliases: return
+        # Normalize keys to lower case for matching
+        alias_map = {k.lower(): v for k, v in aliases.items()}
+        
+        target_keys = ["artist", "album_artist"]
+        for key in target_keys:
+            if key not in meta or not meta[key]: continue
+            
+            # Ensure list
+            current = meta[key]
+            if isinstance(current, str): current = [current]
+            
+            new_list = []
+            has_changes = False
+            
+            for art in current:
+                # Check match
+                found = alias_map.get(art.strip().lower())
+                if found:
+                    has_changes = True
+                    if isinstance(found, list): new_list.extend(found)
+                    else: new_list.append(str(found))
+                else:
+                    new_list.append(art)
+            
+            if has_changes:
+                # Dedup preserving order
+                seen = set()
+                final = []
+                for x in new_list:
+                    if x not in seen:
+                        final.append(x)
+                        seen.add(x)
+                meta[key] = final
+
+    def handle_features(self, meta: Dict, ui: Optional['TreeUI'] = None):
         mode = self.config.get("defaults.feat_handling")
-        if mode == "keep": return
         
         def extract_from_string(s):
             found = []
@@ -791,13 +864,29 @@ class Tagger:
         if not isinstance(meta["artist"], list):
             meta["artist"] = [str(meta["artist"])]
 
+        # Check Title for Features
         if meta.get("title"):
             feats, clean_title = extract_from_string(meta["title"])
-            for f in feats:
-                if f not in meta["artist"]: meta["artist"].append(f)
             if feats:
-                if mode == "split": meta["title"] = f"! {clean_title}"
-                elif mode == "split-clean": meta["title"] = clean_title
+                if mode == "keep-both":
+                    # Notify
+                    msg = f"Features detected in title: '{meta['title']}' -> {feats} (Use -F to fix)"
+                    if ui: ui.message(msg, color=Colors.YELLOW)
+                    else: print(f"    {Colors.YELLOW}[!] {msg}{Colors.RESET}")
+                else:
+                    # Update Artist List?
+                    if mode in ["split", "split-clean", "keep-title"]:
+                        for f in feats:
+                            if f not in meta["artist"]: meta["artist"].append(f)
+                    
+                    # Update Title?
+                    if mode == "split":
+                        meta["title"] = f"! {clean_title}"
+                    elif mode in ["split-clean", "keep-artist"]:
+                        meta["title"] = clean_title
+                    # keep-title leaves title alone
+
+        if mode == "keep-both": return
 
         current_artists = list(meta["artist"])
         new_artist_list = []
@@ -834,9 +923,13 @@ class Tagger:
         if isinstance(artists, list): return sep.join(artists)
         return str(artists)
 
-    def apply_metadata(self, audio, meta: Dict, manual: Dict = None):
+    def apply_metadata(self, audio, meta: Dict, manual: Dict = None, ui: Optional['TreeUI'] = None):
         if manual: meta.update(manual)
-        self.handle_features(meta)
+        
+        # Apply Aliases/Replacements FIRST
+        self.apply_aliases(meta)
+        
+        self.handle_features(meta, ui)
         self.expand_artist_groups(meta)
         if self.logger.is_dry: return
 
@@ -960,7 +1053,7 @@ class SwissTag:
         parser.add_argument("-a", "--album", action="store_true", help="Album Mode")
         parser.add_argument("-s", "--search", nargs="+", help="Manual search")
         parser.add_argument("-t", "--manual-tags", nargs="+", help="Override tags")
-        parser.add_argument("-F", "--feat-handling", choices=['keep', 'split', 'split-clean'], default="split")
+        parser.add_argument("-F", "--feat-handling", choices=['split', 'split-clean', 'keep-title', 'keep-artist', 'keep-both'], default="keep-title")
         parser.add_argument("-f", "--filesystem", help="rename, match-filename, infer-dirs, autosort")
         parser.add_argument("-c", "--cover-art", help="auto, file=path, extract")
         parser.add_argument("-l", "--lyrics", help="embed, lrc, both")
@@ -1191,7 +1284,8 @@ class SwissTag:
             }
             
             ui.step("Fetching lyrics...")
-            lyrics = self.meta_provider.fetch_lyrics_for_track(track['id'], title=track['title'], artist=track['artist'], source_mode=lyr_src)
+            # Pass UI to fetch_lyrics_for_track so interactive prompts respect the tree
+            lyrics = self.meta_provider.fetch_lyrics_for_track(track['id'], title=track['title'], artist=track['artist'], source_mode=lyr_src, ui=ui)
             has_lyrics = bool(lyrics)
             if lyrics: file_meta['lyrics'] = lyrics
             
@@ -1211,16 +1305,19 @@ class SwissTag:
                 manual = self.parse_kv(self.args.manual_tags)
                 # Show planned tags before applying
                 try:
-                    print(f"\n{Colors.BLUE}Planned tags to apply:{Colors.RESET}")
-                    display_meta = dict(file_meta)
+                    # Filter out lyrics from display
+                    display_meta = {k: v for k, v in file_meta.items() if k != 'lyrics'}
+                    
                     if 'artist' in display_meta and isinstance(display_meta['artist'], list):
                         display_meta['artist'] = self.tagger._join_artists(display_meta['artist'])
+                    
+                    ui.message(f"Planned tags:", color=Colors.BLUE)
                     for k in sorted(display_meta.keys()):
-                        print(f"  {k}: {display_meta[k]}")
+                        ui.message(f"{k}: {display_meta[k]}", color=Colors.BLUE)
                 except Exception:
                     pass
 
-                self.tagger.apply_metadata(audio, file_meta, manual)
+                self.tagger.apply_metadata(audio, file_meta, manual, ui=ui)
                 if cover_path: self.tagger.apply_cover(audio, cover_path)
                 if cover_data: self.tagger.save_cover(filepath, cover_data, album_meta['album'])
                 write_success = True
@@ -1256,7 +1353,9 @@ class SwissTag:
             # Show planned tags before applying
             try:
                 print(f"\n{Colors.BLUE}Planned tags to apply:{Colors.RESET}")
-                display_meta = dict(meta)
+                # Filter out lyrics from display here as well for single mode consistency
+                display_meta = {k: v for k, v in meta.items() if k != 'lyrics'}
+                
                 if 'artist' in display_meta and isinstance(display_meta['artist'], list):
                     display_meta['artist'] = self.tagger._join_artists(display_meta['artist'])
                 for k in sorted(display_meta.keys()):
