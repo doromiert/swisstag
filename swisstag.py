@@ -20,7 +20,7 @@ from io import BytesIO
 
 # --- Constants & Configuration ---
 APP_NAME = "swisstag"
-VERSION = "5.0"
+VERSION = "5.0.1"
 # Resolve configuration file location.
 # Priority (highest -> lowest):
 # 1) SWISSTAG_CONFIG env var (full path to a config file)
@@ -767,8 +767,19 @@ class Tagger:
             match = self.feat_regex.search(s)
             if match:
                 feat_str = match.group(1)
-                found = [f.strip() for f in re.split(r',|&', feat_str)]
+                # Split on commas and ampersands, allowing optional surrounding whitespace
+                found = [f.strip() for f in re.split(r"\s*(?:,|&)\s*", feat_str) if f.strip()]
                 clean_s = self.feat_regex.sub("", s).strip()
+            else:
+                # If there's no explicit feat/with token, also handle plain artist lists
+                # like: "Artist A, Artist B & Artist C" by splitting on commas and ampersands.
+                # This allows international characters (e.g., "Łona, Andrzej & Kacper").
+                if re.search(r'[,&]', s):
+                    parts = [f.strip() for f in re.split(r"\s*(?:,|&)\s*", s) if f.strip()]
+                    if len(parts) > 1:
+                        found = parts
+                        # Keep the first part as the "clean" primary value
+                        clean_s = parts[0]
             return found, clean_s
 
         # FIX: Guard against NoneType error if artist is missing
@@ -792,7 +803,11 @@ class Tagger:
         new_artist_list = []
         for art in current_artists:
             feats, clean_art = extract_from_string(art)
-            if clean_art not in new_artist_list: new_artist_list.append(clean_art)
+            # Further split the cleaned artist string on commas and ampersands
+            parts = [p.strip() for p in re.split(r"\s*(?:,|&)\s*", clean_art) if p.strip()]
+            for part in parts:
+                if part not in new_artist_list: new_artist_list.append(part)
+            # Add any featured artists extracted from the string
             for f in feats:
                 if f not in new_artist_list: new_artist_list.append(f)
         meta["artist"] = new_artist_list
